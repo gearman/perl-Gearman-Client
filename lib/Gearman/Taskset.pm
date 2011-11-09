@@ -85,7 +85,7 @@ sub cancel {
     }
 
     while (my ($hp, $sock) = each %{ $ts->{loaned_sock} }) {
-        $sock->close;
+        $sock->close if $sock;
     }
 
     $ts->{waiting}     = {};
@@ -102,7 +102,10 @@ sub _get_loaned_sock {
     }
 
     my $sock = $ts->{client}->_get_js_sock($hostport);
-    return $ts->{loaned_sock}{$hostport} = $sock;
+    if ($sock) {
+        $ts->{loaned_sock}{$hostport} = $sock;
+    }
+    return $sock;
 }
 
 # event loop for reading in replies
