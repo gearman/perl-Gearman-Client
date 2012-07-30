@@ -416,13 +416,13 @@ sub work {
 
         $is_idle = 0 if keys %active_js;
 
-        return if $stop_if->($is_idle, $last_job_time);
-
         my $update_since = time - (15 + rand 60);
 
         while (my ($js, $last_update) = each %last_update_time) {
             $active_js{$js} = 1 if $last_update < $update_since;
         }
+
+        return if $stop_if->($is_idle, $last_job_time);
     }
 
 }
@@ -513,7 +513,7 @@ Gearman::Worker - Worker for gearman distributed job system
     my $worker = Gearman::Worker->new;
     $worker->job_servers('127.0.0.1');
     $worker->register_function($funcname => $subref);
-    $worker->work while 1;
+    $worker->work;
 
 =head1 DESCRIPTION
 
@@ -585,7 +585,7 @@ a gimpy worker from ruining the 'user experience' in many situations.
 The subroutine reference can return a return value, which will be sent back
 to the job server.
 
-=head2 $client-E<gt>prefix($prefix)
+=head2 $worker-E<gt>prefix($prefix)
 
 Sets the namespace / prefix for the function names.  This is useful
 for sharing job servers between different applications or different
@@ -594,6 +594,76 @@ example).
 
 The namespace is currently implemented as a simple tab separated
 concatentation of the prefix and the function name.
+
+=head2 $worker-E<gt>work(%opts)
+
+Waits for jobs for registered functions and processes them.
+
+You can pass "on_start", "on_complete", "on_fail" and "stop_if" callbacks in
+I<%opts>. None, some or all of them may be passed.
+
+A new L<Gearman::Job> object is created for every incoming job and is passed
+as the only argument when calling the CODE reference specified at
+I<register_function>. All Gearman::Job methods mentioned later in this document
+refert to this L<Gearman::Job> object.
+
+=head3 on_start callback
+
+   $worker-E<gt>work(on_start => sub { print "Running jobid ".shift."\n"; } );
+
+A CODE reference which is called just before a job is started. The job has been
+acknowledged to the job dispatcher server and the job id is being passed to the
+callback.
+
+Any return value is discarded.
+
+=head3 on_complete
+
+   $worker-E<gt>work(on_complete => sub {
+       my ($jobid, $job_return_value) = @_;
+       print "Jobid $jobid completed and returned $job_return_value\n";
+   } );
+
+A CODE reference which is called after each successful job. Two values are passed,
+the job id and the return value of the completed job.
+
+Any return value from the callback is discarded.
+
+=head3 on_fail
+
+   $worker-E<gt>work(on_fail => sub {
+       my ($jobid, $job_error) = @_;
+       print "Jobid $jobid dies because of $job_error\n";
+   } );
+
+A CODE reference which is called after each successful job. Two values are passed,
+the job id and the error code (die value) of the completed job.
+
+Any return value from the callback is discarded.
+
+=head3 stop_if
+
+   $worker-E<gt>work(stop if => sub {
+       my ($is_idle, $last_job_time) = @_;
+       return 1 if $is_idle and int(rand(2));
+   } );
+
+A CODE reference which is called after each successful job. While I<on_complete>
+and I<on_fail> are called before the job's result is send to the Gearman server,
+stop_if is called when everything is done and before the next job has been fetched.
+
+Use stop_if if the client should stop processing jobs (and usually exit itself).
+
+The first value is true when the worker is idle and false if there is any job
+pending for execution but it's still safe to exit.
+
+The second value passed to this callback is the unix timestamp just before the last
+job was started. Don't use it to calculate the "run time" of a job because the time
+elapsed since this timestamp includes network transfer for the return value and wait
+time for a new job (some seconds).
+
+The I<stop_if> callback is expected to return true if the worker loop should be left
+and false otherwise.
 
 =head2 Gearman::Job->arg
 
@@ -604,11 +674,6 @@ Returns the scalar argument that the client sent to the job server.
 Updates the status of the job (most likely, a long-running job) and sends
 it back to the job server. I<$numerator> and I<$denominator> should
 represent the percentage completion of the job.
-
-=head2 Gearman::Job->work(%opts)
-
-Do one job and returns (no value returned).
-You can pass "on_start" "on_complete" and "on_fail" callbacks in I<%opts>.
 
 =head1 WORKERS AS CHILD PROCESSES
 

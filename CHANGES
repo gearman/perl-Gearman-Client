@@ -1,3 +1,6 @@
+     -- Worker argument stop_if was supported but undocumentated, added documentation and fixed
+        RT bug #46373 (stop_if worked but the last jobs return value got lost).
+
      -- Make a jobserver connection use the command timeout during exception negotiation.
 
      -- Make $taskset->add_task use the command timeout to not hang during job submission.
