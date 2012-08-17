@@ -3,7 +3,8 @@ use ExtUtils::MakeMaker;
 # See lib/ExtUtils/MakeMaker.pm for details of how to influence
 # the contents of the Makefile that is written.
 WriteMakefile(
-              'NAME'=> 'Gearman',
+              'NAME'=> 'Gearman::Client',
+              'DISTNAME' => 'Gearman',
               'VERSION_FROM' => 'lib/Gearman/Client.pm',
               'PREREQ_PM' => {
                 String::CRC32 => 0,
