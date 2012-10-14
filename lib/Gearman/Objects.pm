@@ -48,6 +48,7 @@ use fields (
             'on_exception',
             'on_retry',
             'on_status',
+            'on_data',
             'on_post_hooks',   # used internally, when other hooks are done running, prior to cleanup
             'retry_count',
             'timeout',
