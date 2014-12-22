@@ -206,9 +206,17 @@ sub complete {
 sub status {
     my Gearman::Task $task = shift;
     return if $task->{is_finished};
-    return unless $task->{on_status};
+    
     my ($nu, $de) = @_;
     $task->{on_status}->($nu, $de);
+}
+
+sub data {
+    my Gearman::Task $task = shift;
+    return if $task->{is_finished};
+    my $result_ref = shift;
+    
+    $task->{on_data}->($result_ref)     if $task->{on_data};
 }
 
 # getter/setter for the fully-qualified handle of form "IP:port//shandle" where

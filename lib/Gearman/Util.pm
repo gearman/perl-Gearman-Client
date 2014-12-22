@@ -51,6 +51,7 @@ our %cmd = (
             # to one jobserver, so no polls/grabs will take place, and server is free
             # to push "job_assign" packets back down.
             24 => [ 'I', "all_yours" ],    # W->J ---
+            28 => [ 'IO', "work_data"],    # W->J/C: HANDLE[0]RES
             );
 
 our %num;  # name -> num
