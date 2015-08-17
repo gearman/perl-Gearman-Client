@@ -132,36 +132,38 @@ sub read_res_packet {
         warn "   Entering read loop\n" if DEBUG;
 
         READ: {
-            local $!;
-            my $rv = sysread($sock, $buf, $readlen, $offset);
+            {
+                local $!;
+                my $rv = sysread($sock, $buf, $readlen, $offset);
 
-            unless ($rv) {
-                warn "   Read error: $!\n" if DEBUG;
-                next LOOP if $! == EAGAIN;
+                unless ($rv) {
+                    warn "   Read error: $!\n" if DEBUG;
+                    next LOOP if $! == EAGAIN;
+                }
+
+                return $err->("read_error")       unless defined $rv;
+                return $err->("eof")              unless $rv;
+
+                unless ($rv >= $readlen) {
+                    warn "   Partial read of $rv bytes, at offset $offset, readlen was $readlen\n" if DEBUG;
+                    $offset += $rv;
+                    $readlen -= $rv;
+                    redo READ;
+                }
+
+                warn "   Finished reading\n" if DEBUG;
             }
 
-            return $err->("read_error")       unless defined $rv;
-            return $err->("eof")              unless $rv;
-
-            unless ($rv >= $readlen) {
-                warn "   Partial read of $rv bytes, at offset $offset, readlen was $readlen\n" if DEBUG;
-                $offset += $rv;
-                $readlen -= $rv;
-                redo READ;
+            if (!defined $type) {
+                next unless length($buf) >= 12;
+                my $header = substr($buf, 0, 12, '');
+                ($magic, $type, $len) = unpack("a4NN", $header);
+                return $err->("malformed_magic") unless $magic eq "\0RES";
+                my $starting = length($buf);
+                $readlen = $len - $starting;
+                $offset = $starting;
+                redo READ if $readlen;
             }
-
-            warn "   Finished reading\n" if DEBUG;
-        }
-
-        if (!defined $type) {
-            next unless length($buf) >= 12;
-            my $header = substr($buf, 0, 12, '');
-            ($magic, $type, $len) = unpack("a4NN", $header);
-            return $err->("malformed_magic") unless $magic eq "\0RES";
-            my $starting = length($buf);
-            $readlen = $len - $starting;
-            $offset = $starting;
-            goto READ if $readlen;
         }
 
         $type = $cmd{$type};
