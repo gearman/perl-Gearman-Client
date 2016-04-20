@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 
 use strict;
+use Data::Dumper;
 use Gearman::Client;
 use Storable qw( freeze );
 use Test::More;
@@ -213,15 +214,15 @@ like($out, qr/p.+6/, 'High priority tasks executed in priority order.');
 respawn_children();
 
 my $js_status = $client->get_job_server_status();
-isnt($js_status->{'127.0.0.1:9050'}->{echo_prefix}->{capable}, 0, 'Correct capable jobs for echo_prefix');
-isnt($js_status->{'127.0.0.1:9051'}->{echo_prefix}->{capable}, 0, 'Correct capable jobs for echo_prefix, again');
-isnt($js_status->{'127.0.0.1:9052'}->{echo_prefix}->{capable}, 0, 'Correct capable jobs for echo_prefix, yet again');
-is($js_status->{'127.0.0.1:9050'}->{echo_prefix}->{running}, 0, 'Correct running jobs for echo_prefix');
-is($js_status->{'127.0.0.1:9051'}->{echo_prefix}->{running}, 0, 'Correct running jobs for echo_prefix, again');
-is($js_status->{'127.0.0.1:9052'}->{echo_prefix}->{running}, 0, 'Correct running jobs for echo_prefix, yet again');
-is($js_status->{'127.0.0.1:9050'}->{echo_prefix}->{queued}, 0, 'Correct queued jobs for echo_prefix');
-is($js_status->{'127.0.0.1:9051'}->{echo_prefix}->{queued}, 0, 'Correct queued jobs for echo_prefix, again');
-is($js_status->{'127.0.0.1:9052'}->{echo_prefix}->{queued}, 0, 'Correct queued jobs for echo_prefix, yet again');
+isnt($js_status->{'127.0.0.1:'. PORT}->{echo_prefix}->{capable}, 0, 'Correct capable jobs for echo_prefix');
+isnt($js_status->{'127.0.0.1:'. ( PORT + 1 )}->{echo_prefix}->{capable}, 0, 'Correct capable jobs for echo_prefix, again');
+isnt($js_status->{'127.0.0.1:'. ( PORT + 2 )}->{echo_prefix}->{capable}, 0, 'Correct capable jobs for echo_prefix, yet again');
+is($js_status->{'127.0.0.1:'. PORT}->{echo_prefix}->{running}, 0, 'Correct running jobs for echo_prefix');
+is($js_status->{'127.0.0.1:'. ( PORT + 1 )}->{echo_prefix}->{running}, 0, 'Correct running jobs for echo_prefix, again');
+is($js_status->{'127.0.0.1:'. ( PORT + 2 )}->{echo_prefix}->{running}, 0, 'Correct running jobs for echo_prefix, yet again');
+is($js_status->{'127.0.0.1:'. PORT}->{echo_prefix}->{queued}, 0, 'Correct queued jobs for echo_prefix');
+is($js_status->{'127.0.0.1:'. ( PORT + 1 )}->{echo_prefix}->{queued}, 0, 'Correct queued jobs for echo_prefix, again');
+is($js_status->{'127.0.0.1:'. ( PORT + 2 )}->{echo_prefix}->{queued}, 0, 'Correct queued jobs for echo_prefix, yet again');
 
 $tasks = $client->new_task_set;
 $tasks->add_task('sleep', 1);
