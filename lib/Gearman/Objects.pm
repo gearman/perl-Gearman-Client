@@ -1,71 +1,214 @@
-use strict;
-
 package Gearman::Objects;
-# this dummy package exists purely for building RPMs,
-# some tools of which have requirements for above package
-# line and the filename to match somehow.
+use version;
+$Gearman::Objects::VERSION = qv("2.001.001"); # TRIAL
 
-package Gearman::Client;
-use fields (
-            'job_servers',
-            'js_count',
-            'sock_cache',  # hostport -> socket
-            'sock_info',   # hostport -> hashref
-            'hooks',       # hookname -> coderef
-            'prefix',
-            'debug',
-            'exceptions',
-            'backoff_max',
-            'command_timeout', # maximum time a gearman command should take to get a result (not a job timeout)
-            );
+use strict;
+use warnings;
 
-package Gearman::Taskset;
+=head1 NAME
 
-use fields (
-            'waiting',  # { handle => [Task, ...] }
-            'client',   # Gearman::Client
-            'need_handle',  # arrayref
+Gearman::Objects - a parrent class for L<Gearman::Client> and L<Gearman::Worker>
 
-            'default_sock',     # default socket (non-merged requests)
-            'default_sockaddr', # default socket's ip/port
+=head1 METHODS
 
-            'loaned_sock',      # { hostport => socket }
-            'cancelled',        # bool, if taskset has been cancelled mid-processing
-            'hooks',       # hookname -> coderef
-            );
+=cut
 
+use constant DEFAULT_PORT => 4730;
 
-package Gearman::Task;
+use Carp            ();
+use IO::Socket::IP  ();
+use IO::Socket::SSL ();
+use Socket          ();
 
-use fields (
-            # from client:
-            'func',
-            'argref',
-            # opts from client:
-            'uniq',
-            'on_complete',
-            'on_fail',
-            'on_exception',
-            'on_retry',
-            'on_status',
-            'on_post_hooks',   # used internally, when other hooks are done running, prior to cleanup
-            'retry_count',
-            'timeout',
-            'try_timeout',
-            'high_priority',
-            'background',
+use fields qw/
+    debug
+    job_servers
+    js_count
+    prefix
+    use_ssl
+    ssl_socket_cb
+    /;
 
-            # from server:
-            'handle',
+sub new {
+    my Gearman::Objects $self = shift;
+    my (%opts) = @_;
+    unless (ref($self)) {
+        $self = fields::new($self);
+    }
+    $self->{job_servers} = [];
+    $self->{js_count}    = 0;
 
-            # maintained by this module:
-            'retries_done',
-            'is_finished',
-            'taskset',
-            'jssock',  # jobserver socket.  shared by other tasks in the same taskset,
-                       # but not w/ tasks in other tasksets using the same Gearman::Client
-            'hooks',       # hookname -> coderef
-            );
+    $opts{job_servers}
+        && $self->set_job_servers(
+        ref($opts{job_servers})
+        ? @{ $opts{job_servers} }
+        : [$opts{job_servers}]
+        );
 
+    $self->debug($opts{debug});
+    $self->prefix($opts{prefix});
+    if ($self->use_ssl($opts{use_ssl})) {
+        $self->{ssl_socket_cb} = $opts{ssl_socket_cb};
+    }
+
+    return $self;
+} ## end sub new
+
+=head2 job_servers([$js])
+
+getter/setter
+
+C<$js> array reference or scalar
+
+=cut
+
+sub job_servers {
+    my ($self) = shift;
+    (@_) && $self->set_job_servers(@_);
+
+    return wantarray ? @{ $self->{job_servers} } : $self->{job_servers};
+} ## end sub job_servers
+
+=head2 set_job_servers($js)
+
+set job_servers attribute by canonicalized C<$js>_
+
+=cut
+
+sub set_job_servers {
+    my $self = shift;
+    my $list = $self->canonicalize_job_servers(@_);
+
+    $self->{js_count} = scalar @$list;
+    return $self->{job_servers} = $list;
+} ## end sub set_job_servers
+
+=head2 canonicalize_job_servers($js)
+
+C<$js> array reference or scalar
+
+B<return> [canonicalized list]
+
+=cut
+
+sub canonicalize_job_servers {
+    my ($self) = shift;
+    my @in;
+
+    # take arrayref or array
+    if (ref($_[0])) {
+        ref($_[0]) eq "ARRAY"
+            || Carp::croak
+            "canonicalize_job_servers argument is not a reference on array";
+        @in = @{ $_[0] };
+    } ## end if (ref($_[0]))
+    else {
+        @in = @_;
+    }
+
+    my $out = [];
+    foreach my $i (@in) {
+        $i
+            || Carp::croak
+            "canonicalize_job_servers argument contails an undefined parameter";
+        if ($i !~ /:/) {
+            $i .= ':' . Gearman::Objects::DEFAULT_PORT;
+        }
+        push @{$out}, $i;
+    } ## end foreach my $i (@in)
+    return $out;
+} ## end sub canonicalize_job_servers
+
+sub debug {
+    return shift->_property("debug", @_);
+}
+
+=head2 prefix([$prefix])
+
+getter/setter
+
+=cut
+
+sub prefix {
+    return shift->_property("prefix", @_);
+}
+
+sub use_ssl {
+    return shift->_property("use_ssl", @_);
+}
+
+=head2 socket($host_port, [$timeout])
+
+depends on C<use_ssl> 
+prepare L<IO::Socket::IP>
+or L<IO::Socket::SSL>
+
+=over
+
+=item
+
+C<$host_port> peer address
+
+=item
+
+C<$timeout> default: 1
+
+=back
+
+B<return> depends on C<use_ssl> IO::Socket::(IP|SSL) on success
+
+=cut
+
+sub socket {
+    my ($self, $pa, $t) = @_;
+    my ($h, $p) = ($pa =~ /^(.*):(\d+)$/);
+
+    my %opts = (
+        PeerPort => $p,
+        PeerHost => $h,
+        Timeout  => $t || 1
+    );
+    my $sc;
+    if ($self->use_ssl()) {
+        $sc = "IO::Socket::SSL";
+        $self->{ssl_socket_cb} && $self->{ssl_socket_cb}->(\%opts);
+    }
+    else {
+        $sc = "IO::Socket::IP";
+    }
+
+    my $s = $sc->new(%opts);
+    $s || Carp::carp("connection failed error='$@'",
+        $self->use_ssl()
+        ? ", ssl_error='$IO::Socket::SSL::SSL_ERROR'"
+        : "");
+
+    return $s;
+} ## end sub socket
+
+=head2 sock_nodelay($sock)
+
+set TCP_NODELAY on $sock, die on failure
+
+=cut
+sub sock_nodelay {
+    my ($self, $sock) = @_;
+    setsockopt($sock, Socket::IPPROTO_TCP, Socket::TCP_NODELAY, pack("l", 1))
+        or Carp::croak "setsockopt: $!";
+}
+
+#
+# _property($name, [$value])
+# set/get
+sub _property {
+    my $self = shift;
+    my $name = shift;
+    $name || return;
+    if (@_) {
+        $self->{$name} = shift;
+    }
+
+    return $self->{$name};
+} ## end sub _property
 
 1;

@@ -1,40 +1,82 @@
 package Gearman::ResponseParser;
+use version;
+$Gearman::ResponseParser::VERSION = qv("2.001.001"); # TRIAL
+
 use strict;
+use warnings;
 
-# this is an abstract base class.  See:
-#    Gearman::ResponseParser::Taskset  (for Gearman::Client, the sync version), or
+=head1 NAME
+
+Gearman::ResponseParser - gearmand abstract response parser implementation
+
+=head1 DESCRIPTION
+
+
+I<Gearman::ResponseParser> is an abstract base class.
+
+See: L<Gearman::ResponseParser::Taskset>
+
+Subclasses should call this first, then add their own data in underscore members
+
+=head1 METHODS
+
+=cut
+
 #    Gearman::ResponseParser::Danga    (for Gearman::Client::Danga, the async version)
-
-# subclasses should call this first, then add their own data in underscore members
 sub new {
     my $class = shift;
     my %opts  = @_;
-    my $src = delete $opts{'source'};
-    die if %opts;
+    my $src   = delete $opts{'source'};
+    die "unsupported arguments '@{[keys %opts]}'" if %opts;
 
     my $self = bless {
-        source => $src,  # the source object/socket that is primarily feeding this.
+
+        # the source object/socket that is primarily feeding this.
+        source => $src,
     }, $class;
 
     $self->reset;
     return $self;
-}
+} ## end sub new
+
+=head2 source()
+
+B<return> source. The source is object/socket
+
+=cut
 
 sub source {
     my $self = shift;
     return $self->{source};
 }
 
+=head2 on_packet($packet, $parser)
+
+subclasses should override this
+
+=cut
+
 sub on_packet {
     my ($self, $packet, $parser) = @_;
     die "SUBCLASSES SHOULD OVERRIDE THIS";
 }
 
+=head2 on_error($msg, $parser)
+
+subclasses should override this
+
+=cut
+
 sub on_error {
     my ($self, $errmsg, $parser) = @_;
+
     # NOTE: this interface will evolve.
     die "SUBCLASSES SHOULD OVERRIDE THIS";
-}
+} ## end sub on_error
+
+=head2 reset()
+
+=cut
 
 sub reset {
     my $self = shift;
@@ -42,11 +84,16 @@ sub reset {
     $self->{pkt}    = undef;
 }
 
-# don't override:
-# FUTURE OPTIMIZATION: let caller say "you can own this scalarref", and then we can keep it
-#  on the initial settin of $self->{data} and avoid copying into our own.  overkill for now.
+=head2 parse_data($data)
+
+don't override:
+FUTURE OPTIMIZATION: let caller say "you can own this scalarref", and then we can keep it
+on the initial setting of $self->{data} and avoid copying into our own.  overkill for now.
+
+=cut
+
 sub parse_data {
-    my ($self, $data) = @_;  # where $data is a scalar or scalarref to parse
+    my ($self, $data) = @_;    # where $data is a scalar or scalarref to parse
     my $dataref = ref $data ? $data : \$data;
 
     my $err = sub {
@@ -64,65 +111,80 @@ sub parse_data {
             $self->{header} .= substr($$dataref, 0, $need, '');
             next unless length $self->{header} == 12;
 
-            my ($magic, $type, $len) = unpack( "a4NN", $self->{header} );
+            my ($magic, $type, $len) = unpack("a4NN", $self->{header});
             return $err->("malformed_magic") unless $magic eq "\0RES";
 
             my $blob = "";
             $self->{pkt} = {
-                type => Gearman::Util::cmd_name($type),
-                len  => $len,
+                type    => Gearman::Util::cmd_name($type),
+                len     => $len,
                 blobref => \$blob,
             };
             next;
-        }
+        } ## end unless ($hdr_len == 12)
 
         # how much data haven't we read for the current packet?
         my $need = $self->{pkt}{len} - length(${ $self->{pkt}{blobref} });
+
         # copy the MAX(need, have)
         my $to_copy = $lendata > $need ? $need : $lendata;
 
-        ${$self->{pkt}{blobref}} .= substr($$dataref, 0, $to_copy, '');
+        ${ $self->{pkt}{blobref} } .= substr($$dataref, 0, $to_copy, '');
 
         if ($to_copy == $need) {
             $self->on_packet($self->{pkt}, $self);
             $self->reset;
         }
-    }
+    } ## end while (my $lendata = length...)
 
-    if (defined($self->{pkt}) && length(${ $self->{pkt}{blobref} }) == $self->{pkt}{len}) {
+    if (defined($self->{pkt})
+        && length(${ $self->{pkt}{blobref} }) == $self->{pkt}{len})
+    {
         $self->on_packet($self->{pkt}, $self);
         $self->reset;
-    }
-}
+    } ## end if (defined($self->{pkt...}))
+} ## end sub parse_data
 
-# don't override:
+=head2 eof()
+
+don't override
+
+=cut
+
 sub eof {
     my $self = shift;
 
     $self->on_error("EOF");
+
     # ERROR if in middle of packet
-}
+} ## end sub eof
 
-# don't override:
+=head2 parse_sock($sock)
+
+don't override
+
+C<$sock> is readable, we should sysread it and feed it to L<parse_data($data)>
+
+=cut
+
 sub parse_sock {
-    my ($self, $sock) = @_;  # $sock is readable, we should sysread it and feed it to $self->parse_data
-
+    my ($self, $sock) = @_;
     my $data;
     my $rv = sysread($sock, $data, 128 * 1024);
 
-    if (! defined $rv) {
+    if (!defined $rv) {
         $self->on_error("read_error: $!");
         return;
     }
 
     # FIXME:  EAGAIN , EWOULDBLOCK
 
-    if (! $rv) {
+    if (!$rv) {
         $self->eof;
         return;
     }
 
     $self->parse_data(\$data);
-}
+} ## end sub parse_sock
 
 1;

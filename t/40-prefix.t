@@ -1,80 +1,119 @@
-#!/usr/bin/perl
-
 use strict;
-use Gearman::Client;
-use Storable qw( freeze );
+use warnings;
+
+# OK gearmand v1.0.6
+
 use Test::More;
-use Time::HiRes 'sleep';
+use Time::HiRes qw/sleep/;
 
-use lib 't';
-use TestGearman;
+use t::Server ();
+use t::Worker qw/ new_worker /;
 
+my $gts = t::Server->new();
+$gts || plan skip_all => $t::Server::ERROR;
 
+my $job_server = $gts->job_servers();
+$job_server || BAIL_OUT "couldn't start ", $gts->bin();
 
-if (start_server(PORT)) {
-    plan tests => 9;
-} else {
-    plan skip_all => "Can't find server to test with";
-    exit 0;
-}
+use_ok("Gearman::Client");
+use_ok("Gearman::Task");
 
-$NUM_SERVERS = 3;
+subtest "echo prefix", sub {
+    my @p = qw/
+        a
+        b
+        /;
+    my ($func, %clients, %workers) = ("echo_prefix");
+    foreach (@p) {
+        my $prefix = join '_', "prefix", $_;
+        $clients{$_} = new_ok("Gearman::Client",
+            [prefix => $prefix, job_servers => [$job_server]]);
+        $workers{$_} = new_worker(
+            job_servers => [$job_server],
+            prefix => $prefix,
+            func => {
+            $func => sub {
+                join " from ", $_[0]->arg, $prefix;
+            }
+          }
+        );
+    } ## end foreach (@p)
 
-for (1..($NUM_SERVERS-1)) {
-    start_server(PORT + $_)
-}
+    # basic do_task test
+    foreach (@p) {
+        is(
+            ${ $clients{$_}->do_task("echo_prefix", "beep test") },
+            join('_', "beep test from prefix",    $_),
+            join(' ', "basic do_task() - prefix", $_)
+        );
+        is(
+            ${
+                $clients{$_}->do_task(
+                    Gearman::Task->new("echo_prefix", \('beep test'))
+                )
+            },
+            join('_', "beep test from prefix",            $_),
+            join(' ', "Gearman::Task do_task() - prefix", $_)
+        );
+    } ## end foreach (@p)
 
-start_worker(PORT, { prefix => 'prefix_a', num_servers => $NUM_SERVERS });
-start_worker(PORT, { prefix => 'prefix_b', num_servers => $NUM_SERVERS });
+    my %out;
+    my %tasks = map { $_ => $clients{$_}->new_task_set() } @p;
 
-my @job_servers = map { '127.0.0.1:' . (PORT + $_) } 0..$NUM_SERVERS;
+    for my $k (keys %tasks) {
+        $out{$k} = '';
+        $tasks{$k}->add_task(
+            'echo_prefix' => "$k",
+            {
+                on_complete => sub { $out{$k} .= ${ $_[0] } }
+            }
+        );
+    } ## end for my $k (keys %tasks)
 
-my $client_a = Gearman::Client->new(prefix => 'prefix_a');
-isa_ok($client_a, 'Gearman::Client');
-$client_a->job_servers(@job_servers);
+    $tasks{$_}->wait for keys %tasks;
 
-my $client_b = Gearman::Client->new(prefix => 'prefix_b');
-isa_ok($client_b, 'Gearman::Client');
-$client_b->job_servers(@job_servers);
-
-# basic do_task test 
-is(${$client_a->do_task('echo_prefix', 'beep test')}, 'beep test from prefix_a',
-   'basic do_task() - prefix a');
-is(${$client_b->do_task('echo_prefix', 'beep test')}, 'beep test from prefix_b',
-   'basic do_task() - prefix b');
-
-is(${$client_a->do_task(Gearman::Task->new('echo_prefix', \('beep test')))}, 'beep test from prefix_a',
-   'Gearman::Task do_task() - prefix a');
-is(${$client_b->do_task(Gearman::Task->new('echo_prefix', \('beep test')))}, 'beep test from prefix_b',
-   'Gearman::Task do_task() - prefix b');
-
-my %tasks = (
-             a => $client_a->new_task_set,
-             b => $client_b->new_task_set,
-);
-
-my %out; 
-for my $k (keys %tasks) {
-    $out{$k} = '';
-    $tasks{$k}->add_task('echo_prefix' => "$k", { on_complete => sub { $out{$k} .= ${ $_[0] } } });
-}
-$tasks{$_}->wait for keys %tasks;
-
-for my $k (sort keys %tasks) {
-    is($out{$k}, "$k from prefix_$k", "taskset from client_$k");
-}
+    for my $k (sort keys %tasks) {
+        is($out{$k}, "$k from prefix_$k", "taskset from client{$k}");
+    }
+};
 
 ## dispatch_background tasks also support prefixing
-my $bg_task = Gearman::Task->new('echo_sleep', \('sleep prefix test'));
-my $handle = $client_a->dispatch_background($bg_task);
+subtest "dispatch background", sub {
+    my ($func, $prefix) = qw/
+        echo_sleep
+        prefix_a
+        /;
+    my $client = new_ok("Gearman::Client",
+        [prefix => $prefix, job_servers => [$job_server]]);
+    my $worker = new_worker(
+            job_servers => [$job_server],
+            prefix => $prefix,
+            func => {
+        $func => sub {
+            my ($job) = @_;
+            $job->set_status(1, 1);
+            ## allow some time to read the status
+            sleep 2;
+            join " from ", $_[0]->arg, $prefix;
+        }
+      }
+    );
 
-## wait for the task to be done
-my $status;
-my $n = 0;
-do {
-    sleep 0.1;
-    $n++;
-    diag "still waiting..." if $n == 12;
-    $status = $client_a->get_status($handle);
-} until $status->percent == 1 or $n == 20;
-is $status->percent, 1, "Background task completed using prefix";
+    my $bg_task = new_ok("Gearman::Task", [$func, \("sleep prefix test")]);
+    ok(my $handle = $client->dispatch_background($bg_task),
+        "dispatch_background returns a handle");
+
+    # wait for the task to be done
+    my $status;
+    my $n = 0;
+    do {
+        sleep 0.1;
+        $n++;
+        diag "still waiting..." if $n == 12;
+        $status = $client->get_status($handle);
+    } until $status->percent == 1 or $n == 20;
+
+    is($status->percent, 1, "Background task completed using prefix");
+};
+
+done_testing();
